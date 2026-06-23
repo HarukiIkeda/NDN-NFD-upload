@@ -69,7 +69,7 @@ def on_interest_i1(name, param, app_param):
 
     producer_name = payload["producer"]
 
-    session_table[session_id] = {"consumer": consumer_name, "key": None, "i1_name": name}
+    session_table[session_id] = {"consumer": consumer_name, "key": None, "i1_name": name, "i3_names": {}}
     s_g, p_g = generate_keypair()
 
     async def forward_to_producer():
@@ -110,7 +110,7 @@ def on_interest_i3(name, param, app_param):
         uri_parts = Name.to_str(name).strip('/').split('/')
         idx = uri_parts.index("fetch")
         encrypted_component = uri_parts[idx + 1]
-        
+
         print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
         
         # 【追加】I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
@@ -149,6 +149,9 @@ def on_interest_i3(name, param, app_param):
                 
             print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
             
+            # D_3を正しく返すため、受信した I_3 の名前をチャンクIDごとにテーブルに記憶
+            session_table[target_session_id]["i3_names"][chunk_id] = name
+            
             consumer_name = session_table[target_session_id]["consumer"]
 
             i4_name = f"{consumer_name}/upload/{session_id}/{chunk_id}"
@@ -157,7 +160,13 @@ def on_interest_i3(name, param, app_param):
                 d4_name, meta, d4_content = await app.express_interest(
                     i4_name, must_be_fresh=True, lifetime=2000)
                 
-                app.put_data(name, content=d4_content, freshness_period=1000)
+                # 【変更】テーブルを参照し、対応する I_3 の名前を取り出して D_3 を送信
+                target_i3_name = session_table[target_session_id]["i3_names"][chunk_id]
+                app.put_data(target_i3_name, content=d4_content, freshness_period=1000)
+                
+                # 送信完了した名前はテーブルから削除（メモリのクリーンアップ）
+                del session_table[target_session_id]["i3_names"][chunk_id]
+                
                 print(f"[Gateway] Proxied chunk {chunk_id} back to Producer")
             except Exception as e:
                 print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
