@@ -3,7 +3,7 @@ import json
 import base64
 from ndn.app import NDNApp
 from ndn.types import InterestTimeout, InterestNack, InterestCanceled
-from ndn.encoding import Component  # <--- 追加
+from ndn.encoding import Component, Name
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -45,7 +45,11 @@ def encrypt_name(plain_str, session_key):
 
 @app.route(f"{PRODUCER_NAME}/setup")
 def on_interest_i2(name, param, app_param):
-    session_id = Component.to_str(name[2])
+    # キーワード「setup」を基準に session_id を取得
+    uri_parts = Name.to_str(name).strip('/').split('/')
+    idx = uri_parts.index("setup")
+    session_id = uri_parts[idx + 1]
+
     payload = json.loads(bytes(app_param).decode())
     p_g = payload["pub_key"]
     gateway_name = payload["gateway"]

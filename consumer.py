@@ -2,7 +2,7 @@ import asyncio
 import json
 from ndn.app import NDNApp
 from ndn.types import InterestCanceled, InterestTimeout, InterestNack, ValidationFailure
-from ndn.encoding import Component  # <--- 追加
+from ndn.encoding import Component, Name
 
 app = NDNApp()
 CONSUMER_NAME = "/local/consumer1"
@@ -10,8 +10,12 @@ CONSUMER_NAME = "/local/consumer1"
 @app.route(f"{CONSUMER_NAME}/upload")
 def on_interest_i4(name, param, app_param):
     try:
-        session_id = Component.to_str(name[3])
-        chunk_id = int(Component.to_str(name[4]))
+        # キーワード「upload」を基準に session_id と chunk_id を取得
+        uri_parts = Name.to_str(name).strip('/').split('/')
+        idx = uri_parts.index("upload")
+        session_id = uri_parts[idx + 1]
+        chunk_id = int(uri_parts[idx + 2])
+        
         print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}")
         
         data_payload = f"This is chunk {chunk_id} for session {session_id}".encode()

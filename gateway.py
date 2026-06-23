@@ -3,7 +3,7 @@ import json
 import base64
 from ndn.app import NDNApp
 from ndn.types import InterestCanceled, InterestTimeout, InterestNack
-from ndn.encoding import Component  
+from ndn.encoding import Component, Name  
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -58,7 +58,11 @@ def decrypt_name(encrypted_str, session_key):
 
 @app.route(f"{GATEWAY_NAME}/upload-request")
 def on_interest_i1(name, param, app_param):
-    session_id = Component.to_str(name[2])
+    # キーワード「upload-request」を基準に session_id を取得
+    uri_parts = Name.to_str(name).strip('/').split('/')
+    idx = uri_parts.index("upload-request")
+    session_id = uri_parts[idx + 1]
+
     payload = json.loads(bytes(app_param).decode())
     consumer_name = payload["consumer"]
     chunk_size = payload["chunk_size"]
@@ -77,8 +81,10 @@ def on_interest_i1(name, param, app_param):
             d2_name, meta, d2_content = await app.express_interest(
                 i2_name, app_param=i2_param, must_be_fresh=True, lifetime=4000)
             
-            # 【追加】D_2の名前（i2_nameと同じ）から session_id を抽出
-            recv_session_id = Component.to_str(d2_name[2])
+            # 【変更】キーワード「setup」を基準に D_2 の名前から session_id を取得
+            d2_uri_parts = Name.to_str(d2_name).strip('/').split('/')
+            d2_idx = d2_uri_parts.index("setup")
+            recv_session_id = d2_uri_parts[d2_idx + 1]
 
             d2_payload = json.loads(bytes(d2_content).decode())
             p_p = d2_payload["pub_key"]
@@ -100,7 +106,11 @@ def on_interest_i1(name, param, app_param):
 @app.route(f"{GATEWAY_NAME}/fetch")
 def on_interest_i3(name, param, app_param):
     try:
-        encrypted_component = Component.to_str(name[2])
+        # キーワード「fetch」を基準に encrypted_component を取得
+        uri_parts = Name.to_str(name).strip('/').split('/')
+        idx = uri_parts.index("fetch")
+        encrypted_component = uri_parts[idx + 1]
+        
         print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
         
         # 【追加】I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
