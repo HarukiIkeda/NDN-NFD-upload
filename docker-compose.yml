@@ -1,65 +1,138 @@
-version: '3.8'
-
 services:
+  # --- コンシューマー側ネットワーク ---
   consumer:
     build: .
-    command: python consumer.py
-    environment:
-      - NEXT_HOP_HOST=router1
-    depends_on: [router1]
+    container_name: consumer
+    privileged: true
+    networks:
+      - net_c0
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_c1 && 
+               nfdc route add /gateway udp://router_c1 && 
+               python3 consumer.py"
 
-  router1:
+  router_c1:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router1
-      - FIB_ROUTES=/producer-01:router2:9000,/network-A:consumer:9000
+    container_name: router_c1
+    privileged: true
+    networks:
+      - net_c0
+      - net_c1
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://consumer && nfdc route add /local/consumer1 udp://consumer && 
+               nfdc face create udp://router_c2 && nfdc route add /gateway udp://router_c2 && 
+               tail -f /dev/null"
 
-  router2:
+  router_c2:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router2
-      - FIB_ROUTES=/producer-01:router3:9000,/network-A:router1:9000
+    container_name: router_c2
+    privileged: true
+    networks:
+      - net_c1
+      - net_c2
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_c1 && nfdc route add /local/consumer1 udp://router_c1 && 
+               nfdc face create udp://router_c3 && nfdc route add /gateway udp://router_c3 && 
+               tail -f /dev/null"
 
-  router3:
+  router_c3:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router3
-      - FIB_ROUTES=/producer-01:gateway:9000,/network-A:router2:9000
+    container_name: router_c3
+    privileged: true
+    networks:
+      - net_c2
+      - net_c3
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_c2 && nfdc route add /local/consumer1 udp://router_c2 && 
+               nfdc face create udp://gateway && nfdc route add /gateway udp://gateway && 
+               tail -f /dev/null"
 
+  # --- ゲートウェイ（境界ノード） ---
   gateway:
     build: .
-    command: python gateway.py
-    environment:
-      - FIB_ROUTES=/producer-01:router4:9000,/network-A:router3:9000
-    depends_on: [router3, router4]
+    container_name: gateway
+    privileged: true
+    networks:
+      - net_c3
+      - net_p3
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_c3 && 
+               nfdc route add /local/consumer1 udp://router_c3 &&  # <--- これを追加
+               nfdc face create udp://router_p1 && 
+               nfdc route add /producer udp://router_p1 && 
+               python3 gateway.py"
 
-  router4:
+  # --- プロデューサー側ネットワーク ---
+  router_p1:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router4
-      - FIB_ROUTES=/producer-01:router5:9000,/network-A:gateway:9000
+    container_name: router_p1
+    privileged: true
+    networks:
+      - net_p3
+      - net_p2
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://gateway && nfdc route add /gateway udp://gateway && 
+               nfdc face create udp://router_p2 && nfdc route add /producer udp://router_p2 && 
+               tail -f /dev/null"
 
-  router5:
+  router_p2:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router5
-      - FIB_ROUTES=/producer-01:router6:9000,/network-A:router4:9000
+    container_name: router_p2
+    privileged: true
+    networks:
+      - net_p2
+      - net_p1
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_p1 && nfdc route add /gateway udp://router_p1 && 
+               nfdc face create udp://router_p3 && nfdc route add /producer udp://router_p3 && 
+               tail -f /dev/null"
 
-  router6:
+  router_p3:
     build: .
-    command: python router.py
-    environment:
-      - ROUTER_NAME=router6
-      - FIB_ROUTES=/producer-01:producer:9000,/network-A:router5:9000
+    container_name: router_p3
+    privileged: true
+    networks:
+      - net_p1
+      - net_p0
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_p2 && nfdc route add /gateway udp://router_p2 && 
+               nfdc face create udp://producer && nfdc route add /producer udp://producer && 
+               tail -f /dev/null"
 
   producer:
     build: .
-    command: python producer.py
-    environment:
-      - NEXT_HOP_HOST=router6
-    depends_on: [router6]
+    container_name: producer
+    privileged: true
+    networks:
+      - net_p0
+    command: >
+      bash -c "nfd --config /etc/ndn/nfd.conf 2>&1 & sleep 3 && 
+               nfdc face create udp://router_p3 && nfdc route add /gateway udp://router_p3 && 
+               python3 producer.py"
+
+# 隣接関係のみを許可する独立したネットワーク定義
+networks:
+  net_c0:
+    internal: true
+  net_c1:
+    internal: true
+  net_c2:
+    internal: true
+  net_c3:
+    internal: true
+  net_p3:
+    internal: true
+  net_p2:
+    internal: true
+  net_p1:
+    internal: true
+  net_p0:
+    internal: true
