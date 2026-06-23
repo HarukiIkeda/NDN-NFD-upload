@@ -10,7 +10,6 @@ CONSUMER_NAME = "/local/consumer1"
 @app.route(f"{CONSUMER_NAME}/upload")
 def on_interest_i4(name, param, app_param):
     try:
-        # 【変更】Component.to_str を使って純粋な文字列を取得
         session_id = Component.to_str(name[3])
         chunk_id = int(Component.to_str(name[4]))
         print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}")
@@ -22,13 +21,14 @@ def on_interest_i4(name, param, app_param):
     except Exception as e:
         print(f"[Consumer] Error in on_interest_i4: {e}")
 
-async def start_upload(gateway_prefix, session_id, chunk_size):
+async def start_upload(gateway_prefix, producer_prefix, session_id, chunk_size):
     print("[Consumer] Waiting 5 seconds for network convergence...")
     await asyncio.sleep(5)
 
     name = f"{gateway_prefix}/upload-request/{session_id}"
     app_param = json.dumps({
         "consumer": CONSUMER_NAME,
+        "producer": producer_prefix,
         "chunk_size": chunk_size
     }).encode()
 
@@ -41,4 +41,4 @@ async def start_upload(gateway_prefix, session_id, chunk_size):
         print(f"[Consumer] Failed to start upload: {e}")
 
 if __name__ == '__main__':
-    app.run_forever(after_start=start_upload("/gateway", "session-12345", 5))
+    app.run_forever(after_start=start_upload("/gateway", "/producer", "session-12345", 5))

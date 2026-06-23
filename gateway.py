@@ -10,9 +10,8 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.fernet import Fernet
 
 app = NDNApp()
-session_table = {}  # Session ID <-> Consumer Name
+session_table = {}  
 GATEWAY_NAME = "/gateway"
-PRODUCER_PREFIX = "/producer"
 
 # --- ECDH 鍵共有ロジック ---
 def generate_keypair():
@@ -64,26 +63,35 @@ def on_interest_i1(name, param, app_param):
     consumer_name = payload["consumer"]
     chunk_size = payload["chunk_size"]
 
-    session_table[session_id] = {"consumer": consumer_name, "key": None}
+    producer_name = payload["producer"]
+
+    session_table[session_id] = {"consumer": consumer_name, "key": None, "i1_name": name}
     s_g, p_g = generate_keypair()
 
     async def forward_to_producer():
-        i2_name = f"{PRODUCER_PREFIX}/setup/{session_id}"
+        i2_name = f"{producer_name}/setup/{session_id}"
         i2_param = json.dumps({"gateway": GATEWAY_NAME, "chunk_size": chunk_size, "pub_key": p_g}).encode()
         
         try:
+            print(f"[Gateway] Sending I_2 setup request to {producer_name}")
             d2_name, meta, d2_content = await app.express_interest(
                 i2_name, app_param=i2_param, must_be_fresh=True, lifetime=4000)
             
+            # 【追加】D_2の名前（i2_nameと同じ）から session_id を抽出
+            recv_session_id = Component.to_str(d2_name[2])
+
             d2_payload = json.loads(bytes(d2_content).decode())
             p_p = d2_payload["pub_key"]
 
-            # 【重要】本物のECDHセッション鍵を導出し、テーブルに保存する
+            # 【重要】本物のECDHセッション鍵を導出し、テーブルに保存する。D_2から得たsession_idを使ってテーブルを参照し、鍵を保存
             session_key = derive_shared_key(s_g, p_p)
-            session_table[session_id]["key"] = session_key
+            session_table[recv_session_id]["key"] = session_key
             print(f"[Gateway] ECDH Session established. Key secured.")
 
-            app.put_data(name, content=b"Ack", freshness_period=1000)
+            # 【追加】テーブルを参照し、D_1を返す対象となるI_1の名前を取り出す
+            target_i1_name = session_table[recv_session_id]["i1_name"]
+
+            app.put_data(target_i1_name, content=b"Ack", freshness_period=1000)
         except Exception as e:
             print(f"[Gateway] Failed to setup with producer: {e}")
 
@@ -95,37 +103,44 @@ def on_interest_i3(name, param, app_param):
         encrypted_component = Component.to_str(name[2])
         print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
         
-        decrypted = None
-        target_session_id = None
-        
-        # 【検証プロトコル】保持している全てのセッション鍵で復号を試みる
-        for sid, data in session_table.items():
-            sess_key = data.get("key")
-            if not sess_key: continue
+        # 【追加】I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
+        async def process_i3():
+            decrypted = None
+            target_session_id = None
             
-            try:
-                decrypted = decrypt_name(encrypted_component, sess_key)
-                target_session_id = sid
-                break # 復号成功！（＝正当なプロデューサーからのパケットと認証完了）
-            except Exception:
-                continue # 鍵が合わない場合は次を試す
-        
-        if not decrypted:
-            print("[Gateway] Security Error: Decryption failed. No matching session key found!")
-            return
+            # 競合(Race Condition)対策：最大2秒間（0.1秒×20回）鍵がテーブルに入るのを待つ
+            for _ in range(20):
+                for sid, data in session_table.items():
+                    sess_key = data.get("key")
+                    if not sess_key: continue
+                    
+                    try:
+                        decrypted = decrypt_name(encrypted_component, sess_key)
+                        target_session_id = sid
+                        break
+                    except Exception:
+                        continue 
+                
+                if decrypted:
+                    break
+                
+                # 鍵がまだテーブルにない、または復号できない場合は0.1秒待機してリトライ
+                await asyncio.sleep(0.1)
 
-        session_id, chunk_id = decrypted.split("/")
-        
-        # 追加の整合性チェック
-        if session_id != target_session_id:
-            print("[Gateway] Security Error: Decrypted Session ID mismatch!")
-            return
+            if not decrypted:
+                print("[Gateway] Security Error: Decryption failed. No matching session key found!")
+                return
+
+            session_id, chunk_id = decrypted.split("/")
             
-        print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
-        
-        consumer_name = session_table[target_session_id]["consumer"]
+            if session_id != target_session_id:
+                print("[Gateway] Security Error: Decrypted Session ID mismatch!")
+                return
+                
+            print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
+            
+            consumer_name = session_table[target_session_id]["consumer"]
 
-        async def fetch_from_consumer():
             i4_name = f"{consumer_name}/upload/{session_id}/{chunk_id}"
             print(f"[Gateway] Forwarding I_4 to Consumer: {i4_name}")
             try:
@@ -137,7 +152,8 @@ def on_interest_i3(name, param, app_param):
             except Exception as e:
                 print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
 
-        asyncio.create_task(fetch_from_consumer())
+        # I_3の処理（鍵待ち＋転送）をバックグラウンドで開始
+        asyncio.create_task(process_i3())
     except Exception as e:
         print(f"[Gateway] Error in on_interest_i3: {e}")
 
