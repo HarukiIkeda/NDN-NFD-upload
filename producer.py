@@ -70,31 +70,38 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
     semaphore = asyncio.Semaphore(WINDOW_SIZE) #指定した数以上のタスクが同時に実行されるのを防ぐ
 
     async def fetch_single_chunk(chunk_id):
+        max_retries = 3  # 最大3回まで再送を試みる
+
         async with semaphore:
             plain_name = f"{session_id}/{chunk_id}"
             # AESで暗号化する
             encrypted_name = encrypt_name(plain_name, session_key)
             i3_name = f"{gateway_name}/fetch/{encrypted_name}"
             
-            try:
-                print(f"[Producer] Expressing Interest for chunk {chunk_id}: {i3_name}")
-                d3_name, meta, d3_content = await app.express_interest(
-                    i3_name, must_be_fresh=True, lifetime=4000)
+            # パケット送信全体をリトライループで囲む
+            for attempt in range(1, max_retries + 1):
+                try:
+                    print(f"[Producer] Expressing Interest for chunk {chunk_id} (Attempt {attempt}/{max_retries})")
+                    
+                    # エラー時の再送を早めるため、lifetimeを2000msに短縮
+                    d3_name, meta, d3_content = await app.express_interest(
+                        i3_name, must_be_fresh=True, lifetime=2000)
+                    
+                    d3_payload = json.loads(bytes(d3_content).decode('utf-8'))
+                    actual_data = d3_payload["data"]
+                    
+                    print(f"[Producer] Received Data for chunk {chunk_id}: {actual_data}")
+                    return True
                 
-                d3_payload = json.loads(bytes(d3_content).decode('utf-8'))
-                acual_data = d3_payload["data"]
-                
-                print(f"[Producer] Received Data for chunk {chunk_id}: {acual_data}")
-                return True
-            except InterestTimeout:
-                print(f"[Producer] Failed to fetch chunk {chunk_id}: Timeout")
-                return False
-            except InterestNack as nack:
-                print(f"[Producer] Failed to fetch chunk {chunk_id}: Nack ({nack.reason})")
-                return False
-            except Exception as e:
-                print(f"[Producer] Failed to fetch chunk {chunk_id}: {type(e).__name__}")
-                return False
+                except InterestTimeout:
+                    print(f"[Producer] Failed to fetch chunk {chunk_id}: Timeout on attempt {attempt}")
+                except InterestNack as nack:
+                    print(f"[Producer] Failed to fetch chunk {chunk_id}: Nack ({nack.reason}) on attempt {attempt}")
+                except Exception as e:
+                    print(f"[Producer] Failed to fetch chunk {chunk_id}: {type(e).__name__} on attempt {attempt}")
+            
+            print(f"[Producer] Gave up on chunk {chunk_id} after {max_retries} attempts.")
+            return False
 
     print(f"[Producer] Starting pipeline fetch for {chunk_size} chunks (Window: {WINDOW_SIZE})")
     tasks = [fetch_single_chunk(i) for i in range(1, chunk_size + 1)]

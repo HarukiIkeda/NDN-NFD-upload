@@ -120,27 +120,19 @@ def on_interest_i3(name, param, app_param):
             decrypted = None
             target_session_id = None
             
-            # 競合対策：最大2秒間（0.1秒×20回）鍵がテーブルに入るのを待つ
-            for _ in range(20):
-                for sid, data in session_table.items(): #sid: session_id, data: {"consumer": consumer_name, "key": session_key, "i1_name": name, "i3_names": {}}
-                    sess_key = data.get("key") # セッション鍵取り出す
-                    if not sess_key: continue
+            for sid, data in session_table.items(): #sid: session_id, data: {"consumer": consumer_name, "key": session_key, "i1_name": name, "i3_names": {}}
+                sess_key = data.get("key") # セッション鍵取り出す
+                if not sess_key: continue
                     
-                    try:
-                        decrypted = decrypt_name(encrypted_component, sess_key)
-                        target_session_id = sid
-                        break
-                    except Exception:
-                        continue 
-                
-                if decrypted:
+                try:
+                    decrypted = decrypt_name(encrypted_component, sess_key)
+                    target_session_id = sid
                     break
-                
-                # 鍵がまだテーブルにない、または復号できない場合は0.1秒待機してリトライ
-                await asyncio.sleep(0.1)
+                except Exception:
+                    continue 
 
             if not decrypted:
-                print("[Gateway] Security Error: Decryption failed. No matching session key found!")
+                print("[Gateway] Security Error: Decryption failed. Dropped I_3.")
                 return
 
             session_id, chunk_id = decrypted.split("/")
