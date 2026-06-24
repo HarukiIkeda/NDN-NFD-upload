@@ -160,14 +160,17 @@ def on_interest_i3(name, param, app_param):
                 d4_name, meta, d4_content = await app.express_interest(
                     i4_name, must_be_fresh=True, lifetime=2000)
                 
-                # テーブルを参照し、対応する I_3 の名前を取り出して D_3 を送信
-                target_i3_name = session_table[target_session_id]["i3_names"][chunk_id]
+                d4_payload = json.loads(bytes(d4_content).decode('utf-8'))
+                recv_session_id = d4_payload["session_id"]
+                recv_chunk_id = str(d4_payload["chunk_id"])
+
+                target_i3_name = session_table[recv_session_id]["i3_names"][recv_chunk_id]
                 app.put_data(target_i3_name, content=d4_content, freshness_period=1000)
-                
+
                 # 送信完了した名前はテーブルから削除（メモリのクリーンアップ）
-                del session_table[target_session_id]["i3_names"][chunk_id]
+                del session_table[recv_session_id]["i3_names"][recv_chunk_id]
                 
-                print(f"[Gateway] Proxied chunk {chunk_id} back to Producer")
+                print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer")
             except Exception as e:
                 print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
 

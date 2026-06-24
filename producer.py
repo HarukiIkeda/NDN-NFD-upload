@@ -81,7 +81,10 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
                 d3_name, meta, d3_content = await app.express_interest(
                     i3_name, must_be_fresh=True, lifetime=4000)
                 
-                print(f"[Producer] Received Data for chunk {chunk_id}: {bytes(d3_content).decode()}")
+                d3_payload = json.loads(bytes(d3_content).decode('utf-8'))
+                acual_data = d3_payload["data"]
+                
+                print(f"[Producer] Received Data for chunk {chunk_id}: {acual_data}")
                 return True
             except InterestTimeout:
                 print(f"[Producer] Failed to fetch chunk {chunk_id}: Timeout")

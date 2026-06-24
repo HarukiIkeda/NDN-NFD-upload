@@ -17,8 +17,14 @@ def on_interest_i4(name, param, app_param):
         chunk_id = int(uri_parts[idx + 2])
         
         print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}")
+
+        payload_dict = {
+            "session_id": session_id,
+            "chunk_id": chunk_id,
+            "data": f"This is chunk {chunk_id} for session {session_id}"
+        }
         
-        data_payload = f"This is chunk {chunk_id} for session {session_id}".encode()
+        data_payload = json.dumps(payload_dict).encode('utf-8')
         
         app.put_data(name, content=data_payload, freshness_period=1000)
         print(f"[Consumer] Sent Data D_4 for chunk {chunk_id}")
