@@ -10,7 +10,7 @@ CONSUMER_NAME = "/local/consumer1"
 @app.route(f"{CONSUMER_NAME}/upload")
 def on_interest_i4(name, param, app_param):
     try:
-        # キーワード「upload」を基準に session_id と chunk_id を取得
+        # 「upload」を基準に session_id と chunk_id を取得
         uri_parts = Name.to_str(name).strip('/').split('/')
         idx = uri_parts.index("upload")
         session_id = uri_parts[idx + 1]

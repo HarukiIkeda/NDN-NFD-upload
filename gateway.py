@@ -47,18 +47,18 @@ def derive_shared_key(priv_key, peer_pub_str):
     return base64.urlsafe_b64encode(derived_key)
 
 def decrypt_name(encrypted_str, session_key):
-    # 同じセッション鍵をセットしたFernetを準備します
+    # 同じセッション鍵をセットしたFernetを準備
     f = Fernet(session_key)
-    # 暗号化時に削除した末尾の "=" を計算して付け直します。
-    # Base64は必ず4文字区切りになる性質を利用し、足りない文字数分だけ "=" を補完します。
+    # 暗号化時に削除した末尾の "=" を計算して付け直す。
+    # Base64は必ず4文字区切りになる性質を利用し、足りない文字数分だけ "=" を補完。
     pad_len = (4 - len(encrypted_str) % 4) % 4
     padded_str = encrypted_str + ('=' * pad_len)
-    # 補完した文字列をバイト列にして復号(decrypt)し、元の平文文字列に戻して返します。
+    # 補完した文字列をバイト列にして復号(decrypt)し、元の平文文字列に戻して返す。
     return f.decrypt(padded_str.encode('utf-8')).decode('utf-8')
 
 @app.route(f"{GATEWAY_NAME}/upload-request")
 def on_interest_i1(name, param, app_param):
-    # キーワード「upload-request」を基準に session_id を取得
+    # 「upload-request」を基準に session_id を取得
     uri_parts = Name.to_str(name).strip('/').split('/')
     idx = uri_parts.index("upload-request")
     session_id = uri_parts[idx + 1]
@@ -81,7 +81,7 @@ def on_interest_i1(name, param, app_param):
             d2_name, meta, d2_content = await app.express_interest(
                 i2_name, app_param=i2_param, must_be_fresh=True, lifetime=4000)
             
-            # 【変更】キーワード「setup」を基準に D_2 の名前から session_id を取得
+            # 「setup」を基準に D_2 の名前から session_id を取得
             d2_uri_parts = Name.to_str(d2_name).strip('/').split('/')
             d2_idx = d2_uri_parts.index("setup")
             recv_session_id = d2_uri_parts[d2_idx + 1]
@@ -89,39 +89,39 @@ def on_interest_i1(name, param, app_param):
             d2_payload = json.loads(bytes(d2_content).decode())
             p_p = d2_payload["pub_key"]
 
-            # 【重要】本物のECDHセッション鍵を導出し、テーブルに保存する。D_2から得たsession_idを使ってテーブルを参照し、鍵を保存
+            # ECDHセッション鍵を導出し、テーブルに保存する。D_2から得たsession_idを使ってテーブルを参照し、keyにセッション鍵を保存
             session_key = derive_shared_key(s_g, p_p)
-            session_table[recv_session_id]["key"] = session_key
-            print(f"[Gateway] ECDH Session established. Key secured.")
+            session_table[recv_session_id]["key"] = session_key 
+            print(f"[Gateway] Session established. Key secured.")
 
-            # 【追加】テーブルを参照し、D_1を返す対象となるI_1の名前を取り出す
+            # テーブルを参照し、D_1を返す対象となるI_1の名前を取り出す
             target_i1_name = session_table[recv_session_id]["i1_name"]
 
             app.put_data(target_i1_name, content=b"Ack", freshness_period=1000)
         except Exception as e:
             print(f"[Gateway] Failed to setup with producer: {e}")
 
-    asyncio.create_task(forward_to_producer())
+    asyncio.create_task(forward_to_producer()) # I_1の受信処理をブロックしないよう、プロデューサーとの通信をバックグラウンドタスクとして実行
 
 @app.route(f"{GATEWAY_NAME}/fetch")
 def on_interest_i3(name, param, app_param):
     try:
-        # キーワード「fetch」を基準に encrypted_component を取得
+        # 「fetch」を基準に encrypted_component を取得
         uri_parts = Name.to_str(name).strip('/').split('/')
         idx = uri_parts.index("fetch")
         encrypted_component = uri_parts[idx + 1]
 
         print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
         
-        # 【追加】I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
+        # I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
         async def process_i3():
             decrypted = None
             target_session_id = None
             
-            # 競合(Race Condition)対策：最大2秒間（0.1秒×20回）鍵がテーブルに入るのを待つ
+            # 競合対策：最大2秒間（0.1秒×20回）鍵がテーブルに入るのを待つ
             for _ in range(20):
-                for sid, data in session_table.items():
-                    sess_key = data.get("key")
+                for sid, data in session_table.items(): #sid: session_id, data: {"consumer": consumer_name, "key": session_key, "i1_name": name, "i3_names": {}}
+                    sess_key = data.get("key") # セッション鍵取り出す
                     if not sess_key: continue
                     
                     try:
@@ -143,13 +143,13 @@ def on_interest_i3(name, param, app_param):
 
             session_id, chunk_id = decrypted.split("/")
             
-            if session_id != target_session_id:
+            if session_id != target_session_id: # セッションIDが一致しない場合はセキュリティ上の問題として処理を中断
                 print("[Gateway] Security Error: Decrypted Session ID mismatch!")
                 return
                 
             print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
             
-            # D_3を正しく返すため、受信した I_3 の名前をチャンクIDごとにテーブルに記憶
+            # D_3を返すため、受信した I_3 の名前をチャンクIDごとにテーブルに記憶
             session_table[target_session_id]["i3_names"][chunk_id] = name
             
             consumer_name = session_table[target_session_id]["consumer"]
@@ -160,7 +160,7 @@ def on_interest_i3(name, param, app_param):
                 d4_name, meta, d4_content = await app.express_interest(
                     i4_name, must_be_fresh=True, lifetime=2000)
                 
-                # 【変更】テーブルを参照し、対応する I_3 の名前を取り出して D_3 を送信
+                # テーブルを参照し、対応する I_3 の名前を取り出して D_3 を送信
                 target_i3_name = session_table[target_session_id]["i3_names"][chunk_id]
                 app.put_data(target_i3_name, content=d4_content, freshness_period=1000)
                 

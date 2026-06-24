@@ -57,21 +57,22 @@ def on_interest_i2(name, param, app_param):
 
     s_p, p_p = generate_keypair()
     session_key = derive_shared_key(s_p, p_g)
+    print(f"[Producer] Generated the session key for session {session_id}")
     
     d2_payload = json.dumps({"pub_key": p_p}).encode()
     app.put_data(name, content=d2_payload, freshness_period=1000)
-    print(f"[Producer] ECDH Setup complete for session {session_id}")
+    print(f"[Producer] Transmitting producer public key for session {session_id}")
 
     asyncio.create_task(fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_key))
 
 async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_key):
     WINDOW_SIZE = 4
-    semaphore = asyncio.Semaphore(WINDOW_SIZE) #指定した数以上のタスクが同時に実行されるのを防ぐ、交通整理のための仕組み
+    semaphore = asyncio.Semaphore(WINDOW_SIZE) #指定した数以上のタスクが同時に実行されるのを防ぐ
 
     async def fetch_single_chunk(chunk_id):
         async with semaphore:
             plain_name = f"{session_id}/{chunk_id}"
-            # 【重要】本物のAESで暗号化する
+            # AESで暗号化する
             encrypted_name = encrypt_name(plain_name, session_key)
             i3_name = f"{gateway_name}/fetch/{encrypted_name}"
             
