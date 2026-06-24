@@ -69,7 +69,13 @@ def on_interest_i1(name, param, app_param):
 
     producer_name = payload["producer"]
 
-    session_table[session_id] = {"consumer": consumer_name, "key": None, "i1_name": name, "i3_names": {}}
+    session_table[session_id] = {
+        "consumer": consumer_name, 
+        "key": None, 
+        "i1_name": name, 
+        "i3_names": {},
+        "completed_chunks": set()
+    }
     s_g, p_g = generate_keypair()
 
     async def forward_to_producer():
@@ -143,7 +149,19 @@ def on_interest_i3(name, param, app_param):
                 
             print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
             
-            # D_3を返すため、受信した I_3 の名前をチャンクIDごとにテーブルに記憶
+            # すでに完了済みのチャンクかチェック（無視する）
+            if chunk_id in session_table[target_session_id]["completed_chunks"]:
+                print(f"[Gateway] Chunk {chunk_id} is already completed. Ignoring retransmitted I_3.")
+                return
+
+            # すでに処理中（I_4送信済み）のチャンクかチェック
+            if chunk_id in session_table[target_session_id]["i3_names"]:
+                print(f"[Gateway] I_3 for chunk {chunk_id} is already in progress. Updating pending name and skipping I_4.")
+                # 重複してI_4は送らないが、宛先名は「最新の再送パケット(I_3)」に更新しておく
+                session_table[target_session_id]["i3_names"][chunk_id] = name
+                return
+            
+            # 初回のみ名前を登録し、I_4の送信へ進む
             session_table[target_session_id]["i3_names"][chunk_id] = name
             
             consumer_name = session_table[target_session_id]["consumer"]
@@ -163,10 +181,14 @@ def on_interest_i3(name, param, app_param):
 
                 # 送信完了した名前はテーブルから削除（メモリのクリーンアップ）
                 del session_table[recv_session_id]["i3_names"][recv_chunk_id]
+                session_table[recv_session_id]["completed_chunks"].add(recv_chunk_id)
                 
                 print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer")
             except Exception as e:
                 print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
+                # I_4の取得に失敗（タイムアウト等）した場合は、次回のI_3再送時にI_4を送れるよう履歴を消す
+                if chunk_id in session_table[target_session_id]["i3_names"]:
+                    del session_table[target_session_id]["i3_names"][chunk_id]
 
         # I_3の処理（鍵待ち＋転送）をバックグラウンドで開始
         asyncio.create_task(process_i3())
