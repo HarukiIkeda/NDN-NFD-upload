@@ -86,6 +86,8 @@ def on_interest_i1(name, param, app_param):
             d2_idx = d2_uri_parts.index("setup")
             recv_session_id = d2_uri_parts[d2_idx + 1]
 
+            print(f"[Gateway] D_2 received from {producer_name}")
+
             d2_payload = json.loads(bytes(d2_content).decode())
             p_p = d2_payload["pub_key"]
 
