@@ -114,12 +114,11 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
     print(f"[Producer] Starting pipeline fetch for {chunk_size} chunks (Window: {WINDOW_SIZE})")
     tasks = [fetch_single_chunk(i) for i in range(1, chunk_size + 1)]
     results = await asyncio.gather(*tasks)
+
+    completion_time = time.time() - start_time
     success_count = sum(1 for r in results if r)
 
-    # 【評価用】最終メトリクスの計算と表示
-    completion_time = time.time() - start_time
-
-    # print(f"[Producer] Pipeline fetch complete. Successfully received {success_count}/{chunk_size} chunks.")
+    await asyncio.sleep(0.5)  # 少し待ってから最終メトリクスを表示
 
     print(f"\n=== [EVALUATION] Pipeline Complete ===")
     print(f"Chunks Received: {success_count}/{chunk_size}")
