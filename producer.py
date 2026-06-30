@@ -63,12 +63,12 @@ def on_interest_i2(name, param, app_param):
 
     s_p, p_p = generate_keypair()
     session_key = derive_shared_key(s_p, p_g)
-    print(f"[Producer] Generated the session key for session {session_id}")
+    print(f"[Producer] Generated the session key for session {session_id}", flush=True)
     
     d2_payload = json.dumps({"pub_key": p_p}).encode()
     app.put_data(name, content=d2_payload, freshness_period=1000)
     metrics["tx_d"] += 1
-    print(f"[Producer] Transmitting producer public key for session {session_id}")
+    print(f"[Producer] Transmitting producer public key for session {session_id}", flush=True)
 
     asyncio.create_task(fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_key, start_time))
 
@@ -89,7 +89,7 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
             for attempt in range(1, max_retries + 1):
                 try:
                     metrics["tx_i"] += 1
-                    print(f"[Producer] Expressing Interest for chunk {chunk_id} (Attempt {attempt}/{max_retries})")
+                    print(f"[Producer] Expressing Interest for chunk {chunk_id} (Attempt {attempt}/{max_retries})", flush=True)
                     
                     d3_name, meta, d3_content = await app.express_interest(
                         i3_name, must_be_fresh=True, lifetime=1000)
@@ -98,7 +98,7 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
                     d3_payload = json.loads(bytes(d3_content).decode('utf-8'))
                     actual_data = d3_payload["data"]
                     
-                    print(f"[Producer] Received Data for chunk {chunk_id}: {actual_data}")
+                    print(f"[Producer] Received Data for chunk {chunk_id}: {actual_data}", flush=True)
                     return True
                 
                 except InterestTimeout:
@@ -112,13 +112,13 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
             return False
 
     print(f"[Producer] Starting pipeline fetch for {chunk_size} chunks (Window: {WINDOW_SIZE})")
-    tasks = [fetch_single_chunk(i) for i in range(1, chunk_size + 1)]
-    results = await asyncio.gather(*tasks)
+    tasks = [fetch_single_chunk(i) for i in range(1, chunk_size + 1)] # 1からchunk_sizeまでのチャンクを取得するタスクを作成
+    results = await asyncio.gather(*tasks) # すべてのタスクが完了するまで待機し、結果を収集。全て終わると通過
 
     completion_time = time.time() - start_time
     success_count = sum(1 for r in results if r)
 
-    await asyncio.sleep(0.5)  # 少し待ってから最終メトリクスを表示
+    await asyncio.sleep(0.5)  # 少し待ってから最終メトリクスを表示。ログより前に出ることあったため
 
     print(f"\n=== [EVALUATION] Pipeline Complete ===")
     print(f"Chunks Received: {success_count}/{chunk_size}")

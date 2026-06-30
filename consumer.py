@@ -21,7 +21,7 @@ def on_interest_i4(name, param, app_param):
         session_id = uri_parts[idx + 1]
         chunk_id = int(uri_parts[idx + 2])
         
-        print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}")
+        print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}", flush=True)
 
         payload_dict = {
             "session_id": session_id,
@@ -31,9 +31,10 @@ def on_interest_i4(name, param, app_param):
         
         data_payload = json.dumps(payload_dict).encode('utf-8')
         
+        print(f"[Consumer] Sending Data D_4 for chunk {chunk_id}", flush=True)
         app.put_data(name, content=data_payload, freshness_period=1000)
         metrics["tx_d"] += 1  # 送信Data(D_4)
-        print(f"[Consumer] Sent Data D_4 for chunk {chunk_id}")
+        
     except Exception as e:
         print(f"[Consumer] Error in on_interest_i4: {e}")
 
@@ -50,16 +51,16 @@ async def start_upload(gateway_prefix, producer_prefix, session_id, chunk_size):
         "consumer": CONSUMER_NAME,
         "producer": producer_prefix,
         "chunk_size": chunk_size,
-        "start_time": start_time  # 追加
+        "start_time": start_time 
     }).encode()
 
     try:
-        print(f"[Consumer] Sending I_1 for session {session_id}")
+        print(f"[Consumer] Sending I_1 for session {session_id}", flush=True)
         metrics["tx_i"] += 1  # 送信Interest(I_1)
         data_name, meta, content = await app.express_interest(
             name, app_param=app_param, must_be_fresh=True, can_be_prefix=False, lifetime=1000)
         metrics["rx_d"] += 1  # 受信Data(D_1)
-        print("[Consumer] Received Ack (D_1). Waiting for chunk requests...")
+        print("[Consumer] Received Ack (D_1). Waiting for chunk requests...", flush=True)
     except (InterestTimeout, InterestNack) as e:
         print(f"[Consumer] Failed to start upload: {e}")
 

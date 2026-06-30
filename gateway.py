@@ -14,7 +14,7 @@ app = NDNApp()
 session_table = {}  
 GATEWAY_NAME = "/gateway"
 
-# 【評価用】パケットロス率 (RICE論文の Packet Loss Ratio 0.0 ~ 0.1 のシミュレーション用)
+# 【評価用】パケットロス率 
 DROP_RATE = 0.0
 
 # 【評価用】メトリクストラッカー
@@ -79,17 +79,6 @@ def on_interest_i1(name, param, app_param):
         return
     metrics["rx_i"] += 1
 
-    # # 「upload-request」を基準に session_id を取得
-    # uri_parts = Name.to_str(name).strip('/').split('/')
-    # idx = uri_parts.index("upload-request")
-    # session_id = uri_parts[idx + 1]
-
-    # payload = json.loads(bytes(app_param).decode())
-    # consumer_name = payload["consumer"]
-    # chunk_size = payload["chunk_size"]
-
-    # producer_name = payload["producer"]
-
     uri_parts = Name.to_str(name).strip('/').split('/')
     session_id = uri_parts[uri_parts.index("upload-request") + 1]
     payload = json.loads(bytes(app_param).decode())
@@ -104,10 +93,7 @@ def on_interest_i1(name, param, app_param):
     s_g, p_g = generate_keypair()
 
     async def forward_to_producer():
-        # i2_name = f"{producer_name}/setup/{session_id}"
-        # i2_param = json.dumps({"gateway": GATEWAY_NAME, "chunk_size": chunk_size, "pub_key": p_g}).encode()
 
-        # 【評価用】start_time を I_2 へ引き継ぐ
         i2_param = json.dumps({
             "gateway": GATEWAY_NAME, 
             "chunk_size": payload["chunk_size"], 
@@ -140,6 +126,7 @@ def on_interest_i1(name, param, app_param):
             # テーブルを参照し、D_1を返す対象となるI_1の名前を取り出す
             target_i1_name = session_table[recv_session_id]["i1_name"]
 
+            print(f"[Gateway] Sending Ack (D_1) back to Consumer", flush=True)
             app.put_data(target_i1_name, content=b"Ack", freshness_period=1000)
             metrics["tx_d"] += 1
         except Exception as e:
@@ -161,7 +148,7 @@ def on_interest_i3(name, param, app_param):
         idx = uri_parts.index("fetch")
         encrypted_component = uri_parts[idx + 1]
 
-        print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
+        print(f"[Gateway] Received I_3: {encrypted_component[:15]}...", flush=True) # 長いのでログは省略表示
         
         # I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
         async def process_i3():
@@ -188,16 +175,16 @@ def on_interest_i3(name, param, app_param):
                 print("[Gateway] Security Error: Decrypted Session ID mismatch!")
                 return
                 
-            print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
+            print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}", flush=True)
             
             # すでに完了済みのチャンクかチェック（無視する）
             if chunk_id in session_table[target_session_id]["completed_chunks"]:
-                print(f"[Gateway] Chunk {chunk_id} is already completed. Ignoring retransmitted I_3.")
+                print(f"[Gateway] Chunk {chunk_id} is already completed. Ignoring retransmitted I_3.", flush=True)
                 return
 
             # すでに処理中（I_4送信済み）のチャンクかチェック
             if chunk_id in session_table[target_session_id]["i3_names"]:
-                print(f"[Gateway] I_3 for chunk {chunk_id} is already in progress. Updating pending name and skipping I_4.")
+                print(f"[Gateway] I_3 for chunk {chunk_id} is already in progress. Updating pending name and skipping I_4.", flush=True)
                 # 重複してI_4は送らないが、宛先名は「最新の再送パケット(I_3)」に更新しておく
                 session_table[target_session_id]["i3_names"][chunk_id] = name
                 return
@@ -210,7 +197,8 @@ def on_interest_i3(name, param, app_param):
             consumer_name = session_table[target_session_id]["consumer"]
 
             i4_name = f"{consumer_name}/upload/{session_id}/{chunk_id}"
-            print(f"[Gateway] Forwarding I_4 to Consumer: {i4_name}")
+            print(f"[Gateway] Forwarding I_4 to Consumer: {i4_name}", flush=True)
+
             try:
                 metrics["tx_i"] += 1
                 d4_name, meta, d4_content = await app.express_interest(
@@ -222,6 +210,8 @@ def on_interest_i3(name, param, app_param):
                 recv_chunk_id = str(d4_payload["chunk_id"])
 
                 target_i3_name = session_table[recv_session_id]["i3_names"][recv_chunk_id]
+
+                print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer", flush=True)
                 app.put_data(target_i3_name, content=d4_content, freshness_period=1000)
                 metrics["tx_d"] += 1
 
@@ -229,8 +219,7 @@ def on_interest_i3(name, param, app_param):
                 del session_table[recv_session_id]["i3_names"][recv_chunk_id]
                 session_table[recv_session_id]["completed_chunks"].add(recv_chunk_id)
                 update_state_metrics() # ステート減少
-                
-                print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer")
+
             except Exception as e:
                 print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
                 # I_4の取得に失敗（タイムアウト等）した場合は、次回のI_3再送時にI_4を送れるよう履歴を消す
