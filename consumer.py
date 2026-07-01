@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from datetime import datetime
 from ndn.app import NDNApp
 from ndn.types import InterestCanceled, InterestTimeout, InterestNack, ValidationFailure
 from ndn.encoding import Component, Name
@@ -11,6 +12,10 @@ CONSUMER_NAME = "/local/consumer1"
 # 【評価用】パケットカウンタ
 metrics = {"rx_i": 0, "tx_i": 0, "tx_d": 0, "rx_d": 0}
 
+def log_print(msg):
+    t = datetime.now().strftime('%H:%M:%S.%f')[:-1]
+    print(f"[{t}] {msg}", flush=True)
+
 @app.route(f"{CONSUMER_NAME}/upload")
 def on_interest_i4(name, param, app_param):
     metrics["rx_i"] += 1  # 受信Interest(I_4)
@@ -20,8 +25,7 @@ def on_interest_i4(name, param, app_param):
         idx = uri_parts.index("upload")
         session_id = uri_parts[idx + 1]
         chunk_id = int(uri_parts[idx + 2])
-        
-        print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}", flush=True)
+        log_print(f"[Consumer] Received I_4! Requesting chunk {chunk_id}")
 
         payload_dict = {
             "session_id": session_id,
@@ -31,15 +35,15 @@ def on_interest_i4(name, param, app_param):
         
         data_payload = json.dumps(payload_dict).encode('utf-8')
         
-        print(f"[Consumer] Sending Data D_4 for chunk {chunk_id}", flush=True)
+        log_print(f"[Consumer] Sending Data D_4 for chunk {chunk_id}")
         app.put_data(name, content=data_payload, freshness_period=1000)
         metrics["tx_d"] += 1  # 送信Data(D_4)
         
     except Exception as e:
-        print(f"[Consumer] Error in on_interest_i4: {e}")
+        log_print(f"[Consumer] Error in on_interest_i4: {e}")
 
 async def start_upload(gateway_prefix, producer_prefix, session_id, chunk_size):
-    print("[Consumer] Waiting 5 seconds for network convergence...")
+    log_print("[Consumer] Waiting 5 seconds for network convergence...")
     await asyncio.sleep(5)
 
     name = f"{gateway_prefix}/upload-request/{session_id}"
@@ -55,14 +59,14 @@ async def start_upload(gateway_prefix, producer_prefix, session_id, chunk_size):
     }).encode()
 
     try:
-        print(f"[Consumer] Sending I_1 for session {session_id}", flush=True)
+        log_print(f"[Consumer] Sending I_1 for session {session_id}")
         metrics["tx_i"] += 1  # 送信Interest(I_1)
         data_name, meta, content = await app.express_interest(
             name, app_param=app_param, must_be_fresh=True, can_be_prefix=False, lifetime=1000)
         metrics["rx_d"] += 1  # 受信Data(D_1)
-        print("[Consumer] Received Ack (D_1). Waiting for chunk requests...", flush=True)
+        log_print("[Consumer] Received Ack (D_1). Waiting for chunk requests...")
     except (InterestTimeout, InterestNack) as e:
-        print(f"[Consumer] Failed to start upload: {e}")
+        log_print(f"[Consumer] Failed to start upload: {e}")
 
     # しばらく待ってから最終メトリクスを表示
     await asyncio.sleep(15)

@@ -2,6 +2,8 @@ import asyncio
 import json
 import base64
 import random
+import time
+from datetime import datetime
 from ndn.app import NDNApp
 from ndn.types import InterestCanceled, InterestTimeout, InterestNack
 from ndn.encoding import Component, Name  
@@ -20,6 +22,10 @@ DROP_RATE = 0.0
 # 【評価用】メトリクストラッカー
 metrics = {"rx_i": 0, "tx_i": 0, "tx_d": 0, "rx_d": 0}
 state_metrics = {"current_pending_chunks": 0, "max_pending_chunks": 0}
+
+def log_print(msg):
+    t = datetime.now().strftime('%H:%M:%S.%f')[:-1]
+    print(f"[{t}] {msg}", flush=True)
 
 def update_state_metrics():
     # テーブルに保持されている現在処理中(I_4送信中)のチャンク数を計算
@@ -75,13 +81,15 @@ def decrypt_name(encrypted_str, session_key):
 def on_interest_i1(name, param, app_param):
 
     if random.random() < DROP_RATE:
-        print("[Gateway EVAL] Dropped I_1 to simulate packet loss")
+        log_print("[Gateway EVAL] Dropped I_1 to simulate packet loss")
         return
     metrics["rx_i"] += 1
 
     uri_parts = Name.to_str(name).strip('/').split('/')
     session_id = uri_parts[uri_parts.index("upload-request") + 1]
     payload = json.loads(bytes(app_param).decode())
+
+    log_print(f"[Gateway] Received I_1 for session {session_id} from Consumer {payload['consumer']}")
 
     session_table[session_id] = {
         "consumer": payload["consumer"], 
@@ -114,23 +122,23 @@ def on_interest_i1(name, param, app_param):
             # recv_session_id = d2_uri_parts[d2_idx + 1]
             recv_session_id = d2_uri_parts[d2_uri_parts.index("setup") + 1]
 
-            print(f"[Gateway] D_2 received from {payload['producer']}")
+            log_print(f"[Gateway] D_2 received from {payload['producer']}")
 
             p_p = json.loads(bytes(d2_content).decode())["pub_key"]
 
             # ECDHセッション鍵を導出し、テーブルに保存する。D_2から得たsession_idを使ってテーブルを参照し、keyにセッション鍵を保存
             session_key = derive_shared_key(s_g, p_p)
             session_table[recv_session_id]["key"] = session_key 
-            print(f"[Gateway] Session established. Key secured.")
+            log_print(f"[Gateway] Session established. Key secured.")
 
             # テーブルを参照し、D_1を返す対象となるI_1の名前を取り出す
             target_i1_name = session_table[recv_session_id]["i1_name"]
 
-            print(f"[Gateway] Sending Ack (D_1) back to Consumer", flush=True)
+            log_print(f"[Gateway] Sending Ack (D_1) back to Consumer")
             app.put_data(target_i1_name, content=b"Ack", freshness_period=1000)
             metrics["tx_d"] += 1
         except Exception as e:
-            print(f"[Gateway] Failed to setup with producer: {e}")
+            log_print(f"[Gateway] Failed to setup with producer: {e}")
 
     asyncio.create_task(forward_to_producer()) # I_1の受信処理をブロックしないよう、プロデューサーとの通信をバックグラウンドタスクとして実行
 
@@ -138,7 +146,7 @@ def on_interest_i1(name, param, app_param):
 def on_interest_i3(name, param, app_param):
 
     if random.random() < DROP_RATE:
-        print("[Gateway EVAL] Dropped I_3 to simulate packet loss")
+        log_print("[Gateway EVAL] Dropped I_3 to simulate packet loss")
         return
     metrics["rx_i"] += 1
 
@@ -148,7 +156,7 @@ def on_interest_i3(name, param, app_param):
         idx = uri_parts.index("fetch")
         encrypted_component = uri_parts[idx + 1]
 
-        print(f"[Gateway] Received I_3: {encrypted_component[:15]}...", flush=True) # 長いのでログは省略表示
+        log_print(f"[Gateway] Received I_3: {encrypted_component[:15]}...") # 長いのでログは省略表示
         
         # I_3の復号と処理を非同期タスク化し、鍵の確立を待てるようにする
         async def process_i3():
@@ -166,25 +174,25 @@ def on_interest_i3(name, param, app_param):
                     continue 
 
             if not decrypted:
-                print("[Gateway] Security Error: Decryption failed. Dropped I_3.")
+                log_print("[Gateway] Security Error: Decryption failed. Dropped I_3.")
                 return
 
             session_id, chunk_id = decrypted.split("/")
             
             if session_id != target_session_id: # セッションIDが一致しない場合はセキュリティ上の問題として処理を中断
-                print("[Gateway] Security Error: Decrypted Session ID mismatch!")
+                log_print("[Gateway] Security Error: Decrypted Session ID mismatch!")
                 return
                 
-            print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}", flush=True)
+            log_print(f"[Gateway] Decrypted I_3 -> session: {session_id}, chunk: {chunk_id}")
             
             # すでに完了済みのチャンクかチェック（無視する）
             if chunk_id in session_table[target_session_id]["completed_chunks"]:
-                print(f"[Gateway] Chunk {chunk_id} is already completed. Ignoring retransmitted I_3.", flush=True)
+                log_print(f"[Gateway] Chunk {chunk_id} is already completed. Ignoring retransmitted I_3.")
                 return
 
             # すでに処理中（I_4送信済み）のチャンクかチェック
             if chunk_id in session_table[target_session_id]["i3_names"]:
-                print(f"[Gateway] I_3 for chunk {chunk_id} is already in progress. Updating pending name and skipping I_4.", flush=True)
+                log_print(f"[Gateway] I_3 for chunk {chunk_id} is already in progress. Updating pending name and skipping I_4.")
                 # 重複してI_4は送らないが、宛先名は「最新の再送パケット(I_3)」に更新しておく
                 session_table[target_session_id]["i3_names"][chunk_id] = name
                 return
@@ -197,7 +205,7 @@ def on_interest_i3(name, param, app_param):
             consumer_name = session_table[target_session_id]["consumer"]
 
             i4_name = f"{consumer_name}/upload/{session_id}/{chunk_id}"
-            print(f"[Gateway] Forwarding I_4 to Consumer: {i4_name}", flush=True)
+            log_print(f"[Gateway] Forwarding I_4 to Consumer: {i4_name}")
 
             try:
                 metrics["tx_i"] += 1
@@ -211,7 +219,7 @@ def on_interest_i3(name, param, app_param):
 
                 target_i3_name = session_table[recv_session_id]["i3_names"][recv_chunk_id]
 
-                print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer", flush=True)
+                log_print(f"[Gateway] Proxied chunk {recv_chunk_id} back to Producer")
                 app.put_data(target_i3_name, content=d4_content, freshness_period=1000)
                 metrics["tx_d"] += 1
 
@@ -221,7 +229,7 @@ def on_interest_i3(name, param, app_param):
                 update_state_metrics() # ステート減少
 
             except Exception as e:
-                print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
+                log_print(f"[Gateway] Failed to fetch chunk from consumer: {e}")
                 # I_4の取得に失敗（タイムアウト等）した場合は、次回のI_3再送時にI_4を送れるよう履歴を消す
                 if chunk_id in session_table[target_session_id]["i3_names"]:
                     del session_table[target_session_id]["i3_names"][chunk_id]
@@ -230,7 +238,7 @@ def on_interest_i3(name, param, app_param):
         # I_3の処理（鍵待ち＋転送）をバックグラウンドで開始
         asyncio.create_task(process_i3())
     except Exception as e:
-        print(f"[Gateway] Error in on_interest_i3: {e}")
+        log_print(f"[Gateway] Error in on_interest_i3: {e}")
 
 async def print_metrics_periodically():
     await asyncio.sleep(15)

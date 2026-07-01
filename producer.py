@@ -2,6 +2,7 @@ import asyncio
 import json
 import base64
 import time
+from datetime import datetime
 from ndn.app import NDNApp
 from ndn.types import InterestTimeout, InterestNack, InterestCanceled
 from ndn.encoding import Component, Name
@@ -15,6 +16,10 @@ PRODUCER_NAME = "/producer"
 
 # 【評価用】パケットカウンタ
 metrics = {"rx_i": 0, "tx_i": 0, "tx_d": 0, "rx_d": 0}
+
+def log_print(msg):
+    t = datetime.now().strftime('%H:%M:%S.%f')[:-1]
+    print(f"[{t}] {msg}", flush=True)
 
 # --- ECDH 鍵共有ロジック ---
 def generate_keypair():
@@ -55,6 +60,8 @@ def on_interest_i2(name, param, app_param):
     idx = uri_parts.index("setup")
     session_id = uri_parts[idx + 1]
 
+    log_print(f"[Producer] Received I_2 for session {session_id}")
+
     payload = json.loads(bytes(app_param).decode())
     p_g = payload["pub_key"]
     gateway_name = payload["gateway"]
@@ -63,12 +70,12 @@ def on_interest_i2(name, param, app_param):
 
     s_p, p_p = generate_keypair()
     session_key = derive_shared_key(s_p, p_g)
-    print(f"[Producer] Generated the session key for session {session_id}", flush=True)
-    
+    log_print(f"[Producer] Generated the session key for session {session_id}")
+
     d2_payload = json.dumps({"pub_key": p_p}).encode()
     app.put_data(name, content=d2_payload, freshness_period=1000)
     metrics["tx_d"] += 1
-    print(f"[Producer] Transmitting producer public key for session {session_id}", flush=True)
+    log_print(f"[Producer] Transmitting D_2 with producer public key for session {session_id}")
 
     asyncio.create_task(fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_key, start_time))
 
@@ -89,7 +96,7 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
             for attempt in range(1, max_retries + 1):
                 try:
                     metrics["tx_i"] += 1
-                    print(f"[Producer] Expressing Interest for chunk {chunk_id} (Attempt {attempt}/{max_retries})", flush=True)
+                    log_print(f"[Producer] Expressing Interest for chunk {chunk_id} (Attempt {attempt}/{max_retries})")
                     
                     d3_name, meta, d3_content = await app.express_interest(
                         i3_name, must_be_fresh=True, lifetime=1000)
@@ -98,20 +105,20 @@ async def fetch_chunks_pipeline(gateway_name, session_id, chunk_size, session_ke
                     d3_payload = json.loads(bytes(d3_content).decode('utf-8'))
                     actual_data = d3_payload["data"]
                     
-                    print(f"[Producer] Received Data for chunk {chunk_id}: {actual_data}", flush=True)
+                    log_print(f"[Producer] Received Data for chunk {chunk_id}: {actual_data}")
                     return True
                 
                 except InterestTimeout:
-                    print(f"[Producer] Failed to fetch chunk {chunk_id}: Timeout on attempt {attempt}")
+                    log_print(f"[Producer] Failed to fetch chunk {chunk_id}: Timeout on attempt {attempt}")
                 except InterestNack as nack:
-                    print(f"[Producer] Failed to fetch chunk {chunk_id}: Nack ({nack.reason}) on attempt {attempt}")
+                    log_print(f"[Producer] Failed to fetch chunk {chunk_id}: Nack ({nack.reason}) on attempt {attempt}")
                 except Exception as e:
-                    print(f"[Producer] Failed to fetch chunk {chunk_id}: {type(e).__name__} on attempt {attempt}")
+                    log_print(f"[Producer] Failed to fetch chunk {chunk_id}: {type(e).__name__} on attempt {attempt}")
             
-            print(f"[Producer] Gave up on chunk {chunk_id} after {max_retries} attempts.")
+            log_print(f"[Producer] Gave up on chunk {chunk_id} after {max_retries} attempts.")
             return False
 
-    print(f"[Producer] Starting pipeline fetch for {chunk_size} chunks (Window: {WINDOW_SIZE})")
+    log_print(f"[Producer] Starting pipeline fetch for {chunk_size} chunks (Window: {WINDOW_SIZE})")
     tasks = [fetch_single_chunk(i) for i in range(1, chunk_size + 1)] # 1からchunk_sizeまでのチャンクを取得するタスクを作成
     results = await asyncio.gather(*tasks) # すべてのタスクが完了するまで待機し、結果を収集。全て終わると通過
 
